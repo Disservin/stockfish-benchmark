@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import math
 import os
 import re
 import shlex
@@ -155,20 +156,33 @@ def benchmark_target(args: argparse.Namespace, target: Target) -> Result:
 
 def print_summary(base: Result, test: Result) -> None:
     diff = test.mean_nps - base.mean_nps
+    diff_stdev = math.sqrt(base.stdev_nps**2 + test.stdev_nps**2)
+    diff_stderr = math.sqrt(
+        base.stdev_nps**2 / len(base.nps_values)
+        + test.stdev_nps**2 / len(test.nps_values)
+    )
+    if diff_stderr == 0:
+        probability_speedup = 1.0 if diff > 0 else 0.5 if diff == 0 else 0.0
+    else:
+        probability_speedup = normal_cdf(diff / diff_stderr)
     pct = 0.0 if base.mean_nps == 0 else diff * 100.0 / base.mean_nps
 
     print("\nSummary")
-    print("name  ref           resolved                                  mean nps     stdev")
+    print("name  ref           resolved                                  mean nps")
     for name, result in (("base", base), ("test", test)):
         print(
             f"{name:4}  "
             f"{result.target.display_ref[:12]:12}  "
             f"{result.resolved_commit[:40]:40}  "
-            f"{result.mean_nps:10.0f}  "
-            f"{result.stdev_nps:8.0f}"
+            f"{result.mean_nps:10.0f} +/- {result.stdev_nps:.0f}"
         )
 
-    print(f"\nDifference: {diff:+.0f} nodes/second ({pct:+.3f}%)")
+    print(f"\nDifference: {diff:+.0f} +/- {diff_stdev:.0f} nodes/second ({pct:+.3f}%)")
+    print(f"P(speedup > 0): {probability_speedup:.6f}")
+
+
+def normal_cdf(value: float) -> float:
+    return 0.5 * (1.0 + math.erf(value / math.sqrt(2.0)))
 
 
 def positive_int(value: str) -> int:
@@ -236,8 +250,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     )
     parser.add_argument(
         "--speedtest-args",
-        default="1 16 5",
-        help='Quoted arguments after speedtest. Default: "1 16 5"',
+        default="1 16 30",
+        help='Quoted arguments after speedtest. Default: "1 16 30"',
     )
     return parser.parse_args(argv)
 

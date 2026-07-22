@@ -144,7 +144,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--test-pr", type=positive_int, help="GitHub PR number to use as the test target.")
     parser.add_argument("--arch", help="Optional Stockfish make ARCH value, for example x86-64-avx512.")
     parser.add_argument("--runs", type=positive_int, default=1, help="Speedtest runs per commit. Default: 1.")
-    parser.add_argument("--speedtest-args", default="1 16 5", help='Quoted arguments after speedtest. Default: "1 16 5"')
+    parser.add_argument("--speedtest-args", default="1 16 30", help='Quoted arguments after speedtest. Default: "1 16 30"')
     parser.add_argument("--instance", default="benchmark-avx512icl", help="GCP instance name.")
     parser.add_argument("--zone", default="us-central1-a", help="GCP zone.")
     parser.add_argument("--machine-type", default="n2-custom-2-2048", help="GCP machine type.")
