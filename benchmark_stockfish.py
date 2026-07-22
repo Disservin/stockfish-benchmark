@@ -19,8 +19,16 @@ NPS_RE = re.compile(r"^Nodes/second\s*:\s*([0-9][0-9,]*)\s*$", re.MULTILINE)
 
 
 @dataclass
+class Target:
+    label: str
+    repo_url: str
+    ref: str
+    display_ref: str
+
+
+@dataclass
 class Result:
-    commit: str
+    target: Target
     resolved_commit: str
     nps_values: list[int]
 
@@ -39,12 +47,13 @@ def run(
     cmd: list[str],
     cwd: Path | None = None,
     capture: bool = False,
+    check: bool = True,
 ) -> subprocess.CompletedProcess[str]:
     print(f"$ {' '.join(cmd)}", flush=True)
     return subprocess.run(
         cmd,
         cwd=cwd,
-        check=True,
+        check=check,
         text=True,
         stdout=subprocess.PIPE if capture else None,
         stderr=subprocess.STDOUT if capture else None,
@@ -63,8 +72,33 @@ def ensure_stockfish_repo(repo_url: str, source_dir: Path) -> None:
     run(["git", "fetch", "--tags", "origin"], cwd=source_dir)
 
 
-def checkout_commit(source_dir: Path, commit: str) -> str:
-    run(["git", "checkout", "--detach", commit], cwd=source_dir)
+def fetch_ref(source_dir: Path, target: Target) -> str:
+    fetch = run(
+        ["git", "fetch", "--tags", target.repo_url, target.ref],
+        cwd=source_dir,
+        check=False,
+    )
+    if fetch.returncode == 0:
+        return "FETCH_HEAD"
+
+    # A raw commit SHA may not be directly fetchable. Fetch branches from that
+    # repository so commits reachable from advertised refs can be checked out.
+    run(
+        [
+            "git",
+            "fetch",
+            "--tags",
+            target.repo_url,
+            "+refs/heads/*:refs/remotes/benchmark/*",
+        ],
+        cwd=source_dir,
+    )
+    return target.ref
+
+
+def checkout_target(source_dir: Path, target: Target) -> str:
+    checkout_ref = fetch_ref(source_dir, target)
+    run(["git", "checkout", "--detach", checkout_ref], cwd=source_dir)
     completed = run(["git", "rev-parse", "HEAD"], cwd=source_dir, capture=True)
     return completed.stdout.strip()
 
@@ -104,16 +138,19 @@ def run_speedtest(binary: Path, speedtest_args: list[str]) -> int:
     return parse_nps(completed.stdout)
 
 
-def benchmark_commit(args: argparse.Namespace, commit: str) -> Result:
-    resolved_commit = checkout_commit(args.source_dir, commit)
+def benchmark_target(args: argparse.Namespace, target: Target) -> Result:
+    resolved_commit = checkout_target(args.source_dir, target)
     binary = build_stockfish(args.source_dir, args.jobs, args.arch)
 
     nps_values = []
     for run_index in range(1, args.runs + 1):
-        print(f"speedtest run {run_index}/{args.runs} for {commit}", flush=True)
+        print(
+            f"speedtest run {run_index}/{args.runs} for {target.label} {target.display_ref}",
+            flush=True,
+        )
         nps_values.append(run_speedtest(binary, args.speedtest_args))
 
-    return Result(commit=commit, resolved_commit=resolved_commit, nps_values=nps_values)
+    return Result(target=target, resolved_commit=resolved_commit, nps_values=nps_values)
 
 
 def print_summary(base: Result, test: Result) -> None:
@@ -121,11 +158,11 @@ def print_summary(base: Result, test: Result) -> None:
     pct = 0.0 if base.mean_nps == 0 else diff * 100.0 / base.mean_nps
 
     print("\nSummary")
-    print("name  commit        resolved                                  mean nps     stdev")
+    print("name  ref           resolved                                  mean nps     stdev")
     for name, result in (("base", base), ("test", test)):
         print(
             f"{name:4}  "
-            f"{result.commit[:12]:12}  "
+            f"{result.target.display_ref[:12]:12}  "
             f"{result.resolved_commit[:40]:40}  "
             f"{result.mean_nps:10.0f}  "
             f"{result.stdev_nps:8.0f}"
@@ -147,16 +184,34 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     )
     parser.add_argument(
         "base_commit",
-        help="Stockfish commit, tag, or ref to use as the baseline.",
+        help="Baseline commit, branch, tag, or ref.",
     )
     parser.add_argument(
         "test_commit",
-        help="Stockfish commit, tag, or ref to compare against the baseline.",
+        help="Test commit, branch, tag, or ref.",
     )
     parser.add_argument(
         "--repo",
         default=DEFAULT_REPO,
-        help=f"Stockfish git URL. Default: {DEFAULT_REPO}",
+        help=f"Default git URL for both targets. Default: {DEFAULT_REPO}",
+    )
+    parser.add_argument(
+        "--base-repo",
+        help="Git URL for the baseline target. Defaults to --repo.",
+    )
+    parser.add_argument(
+        "--test-repo",
+        help="Git URL for the test target. Defaults to --repo.",
+    )
+    parser.add_argument(
+        "--base-pr",
+        type=positive_int,
+        help="GitHub PR number to use as the baseline target from --base-repo/--repo.",
+    )
+    parser.add_argument(
+        "--test-pr",
+        type=positive_int,
+        help="GitHub PR number to use as the test target from --test-repo/--repo.",
     )
     parser.add_argument(
         "--source-dir",
@@ -187,14 +242,26 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
+def make_targets(args: argparse.Namespace) -> tuple[Target, Target]:
+    base_ref = f"refs/pull/{args.base_pr}/head" if args.base_pr else args.base_commit
+    test_ref = f"refs/pull/{args.test_pr}/head" if args.test_pr else args.test_commit
+    base_display = f"PR#{args.base_pr}" if args.base_pr else args.base_commit
+    test_display = f"PR#{args.test_pr}" if args.test_pr else args.test_commit
+    return (
+        Target("base", args.base_repo or args.repo, base_ref, base_display),
+        Target("test", args.test_repo or args.repo, test_ref, test_display),
+    )
+
+
 def main(argv: list[str]) -> int:
     args = parse_args(argv)
     args.source_dir = args.source_dir.resolve()
     args.speedtest_args = shlex.split(args.speedtest_args)
 
-    ensure_stockfish_repo(args.repo, args.source_dir)
-    base = benchmark_commit(args, args.base_commit)
-    test = benchmark_commit(args, args.test_commit)
+    base_target, test_target = make_targets(args)
+    ensure_stockfish_repo(base_target.repo_url, args.source_dir)
+    base = benchmark_target(args, base_target)
+    test = benchmark_target(args, test_target)
     print_summary(base, test)
     return 0
 
