@@ -30,9 +30,24 @@ jobs:
             exit 1
           fi
 
-          if ! printf '%s' "$ALLOWED_USERS" | tr ',' '\n' | sed 's/^ *//;s/ *$//' | grep -Fx "$ACTOR"; then
-            echo "@$ACTOR is not allowed to trigger benchmarks"
-            exit 1
+          allowed=false
+
+          IFS=',' read -ra users <<< "$ALLOWED_USERS"
+
+          for user in "${users[@]}"; do
+              # Trim leading and trailing whitespace
+              user="${user#"${user%%[![:space:]]*}"}"
+              user="${user%"${user##*[![:space:]]}"}"
+
+              if [[ "$user" == "$ACTOR" ]]; then
+                  allowed=true
+                  break
+              fi
+          done
+
+          if [[ "$allowed" != true ]]; then
+              echo "@$ACTOR is not allowed to trigger benchmarks"
+              exit 1
           fi
 
       - name: Parse benchmark command
