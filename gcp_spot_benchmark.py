@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the Stockfish two-commit benchmark on a GCP spot VM."""
+"""Run a Stockfish target-vs-master benchmark on a GCP spot VM."""
 
 from __future__ import annotations
 
@@ -154,8 +154,7 @@ def run_remote_benchmark(args: argparse.Namespace, remote_runner: str) -> None:
     remote_args = [
         "python3",
         remote_runner,
-        args.base_commit,
-        args.test_commit,
+        args.target_ref,
         "--repo",
         args.repo,
         "--source-dir",
@@ -163,12 +162,8 @@ def run_remote_benchmark(args: argparse.Namespace, remote_runner: str) -> None:
         "--runs",
         str(args.runs),
     ]
-    if args.base_repo:
-        remote_args.extend(["--base-repo", args.base_repo])
     if args.test_repo:
         remote_args.extend(["--test-repo", args.test_repo])
-    if args.base_pr:
-        remote_args.extend(["--base-pr", str(args.base_pr)])
     if args.test_pr:
         remote_args.extend(["--test-pr", str(args.test_pr)])
     if args.arch:
@@ -188,15 +183,12 @@ def positive_int(value: str) -> int:
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Create a GCP spot VM and run benchmark_stockfish.py against two commits.",
+        description="Create a GCP spot VM and compare one Stockfish target against official master.",
     )
-    parser.add_argument("base_commit", help="Baseline commit, branch, tag, or ref.")
-    parser.add_argument("test_commit", help="Test commit, branch, tag, or ref.")
-    parser.add_argument("--repo", default=DEFAULT_REPO, help=f"Default git URL for both targets. Default: {DEFAULT_REPO}")
-    parser.add_argument("--base-repo", help="Git URL for the baseline target. Defaults to --repo.")
+    parser.add_argument("target_ref", help="Target commit, branch, tag, or ref to compare against official Stockfish master.")
+    parser.add_argument("--repo", default=DEFAULT_REPO, help=f"Default git URL for the test target. The baseline is always {DEFAULT_REPO} master.")
     parser.add_argument("--test-repo", help="Git URL for the test target. Defaults to --repo.")
-    parser.add_argument("--base-pr", type=positive_int, help="GitHub PR number to use as the baseline target.")
-    parser.add_argument("--test-pr", type=positive_int, help="GitHub PR number to use as the test target.")
+    parser.add_argument("--test-pr", type=positive_int, help="GitHub PR number to use as the test target. The positional target_ref is ignored when set.")
     parser.add_argument("--arch", help="Optional Stockfish make ARCH value, for example x86-64-avx512.")
     parser.add_argument("--runs", type=positive_int, default=3, help="Speedtest runs per commit. Default: 3.")
     parser.add_argument("--speedtest-args", default="1 16 30", help='Quoted arguments after speedtest. Default: "1 16 30"')

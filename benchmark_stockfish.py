@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build two Stockfish commits and compare speedtest NPS."""
+"""Build Stockfish master and one target ref, then compare speedtest NPS."""
 
 from __future__ import annotations
 
@@ -194,38 +194,25 @@ def positive_int(value: str) -> int:
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Clone/fetch Stockfish, build two commits, run ./stockfish speedtest, and compare Nodes/second.",
+        description="Clone/fetch Stockfish, build official master and one target, run ./stockfish speedtest, and compare Nodes/second.",
     )
     parser.add_argument(
-        "base_commit",
-        help="Baseline commit, branch, tag, or ref.",
-    )
-    parser.add_argument(
-        "test_commit",
-        help="Test commit, branch, tag, or ref.",
+        "target_ref",
+        help="Target commit, branch, tag, or ref to compare against official Stockfish master.",
     )
     parser.add_argument(
         "--repo",
         default=DEFAULT_REPO,
-        help=f"Default git URL for both targets. Default: {DEFAULT_REPO}",
-    )
-    parser.add_argument(
-        "--base-repo",
-        help="Git URL for the baseline target. Defaults to --repo.",
+        help=f"Default git URL for the test target. The baseline is always {DEFAULT_REPO} master.",
     )
     parser.add_argument(
         "--test-repo",
         help="Git URL for the test target. Defaults to --repo.",
     )
     parser.add_argument(
-        "--base-pr",
-        type=positive_int,
-        help="GitHub PR number to use as the baseline target from --base-repo/--repo.",
-    )
-    parser.add_argument(
         "--test-pr",
         type=positive_int,
-        help="GitHub PR number to use as the test target from --test-repo/--repo.",
+        help="GitHub PR number to use as the test target from --test-repo/--repo. The positional target_ref is ignored when set.",
     )
     parser.add_argument(
         "--source-dir",
@@ -257,12 +244,10 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 
 
 def make_targets(args: argparse.Namespace) -> tuple[Target, Target]:
-    base_ref = f"refs/pull/{args.base_pr}/head" if args.base_pr else args.base_commit
-    test_ref = f"refs/pull/{args.test_pr}/head" if args.test_pr else args.test_commit
-    base_display = f"PR#{args.base_pr}" if args.base_pr else args.base_commit
-    test_display = f"PR#{args.test_pr}" if args.test_pr else args.test_commit
+    test_ref = f"refs/pull/{args.test_pr}/head" if args.test_pr else args.target_ref
+    test_display = f"PR#{args.test_pr}" if args.test_pr else args.target_ref
     return (
-        Target("base", args.base_repo or args.repo, base_ref, base_display),
+        Target("base", DEFAULT_REPO, "master", "official/master"),
         Target("test", args.test_repo or args.repo, test_ref, test_display),
     )
 

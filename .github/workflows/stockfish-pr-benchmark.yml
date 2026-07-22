@@ -1,0 +1,130 @@
+name: Stockfish PR Benchmark
+
+on:
+  repository_dispatch:
+    types: [stockfish-pr-benchmark]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: stockfish-pr-benchmark-${{ github.event.client_payload.stockfish_repo }}-${{ github.event.client_payload.pr }}
+  cancel-in-progress: false
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Check benchmark allowlist
+        env:
+          ACTOR: ${{ github.event.client_payload.actor }}
+          ALLOWED_USERS: ${{ vars.BENCHMARK_ALLOWED_USERS }}
+        run: |
+          if [ -z "$ACTOR" ]; then
+            echo "Dispatch payload did not include client_payload.actor; refusing to trigger benchmark"
+            exit 1
+          fi
+
+          if [ -z "$ALLOWED_USERS" ]; then
+            echo "BENCHMARK_ALLOWED_USERS is empty in benchmark repo; refusing to trigger benchmark"
+            exit 1
+          fi
+
+          if ! printf '%s' "$ALLOWED_USERS" | tr ',' '\n' | sed 's/^ *//;s/ *$//' | grep -Fx "$ACTOR"; then
+            echo "@$ACTOR is not allowed to trigger benchmarks in this benchmark repo"
+            exit 1
+          fi
+
+      - name: Checkout benchmark repo
+        uses: actions/checkout@v4
+
+      - name: Create Stockfish GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.STOCKFISH_BENCH_APP_ID }}
+          private-key: ${{ secrets.STOCKFISH_BENCH_APP_PRIVATE_KEY }}
+          owner: ${{ vars.STOCKFISH_OWNER || 'official-stockfish' }}
+          repositories: ${{ vars.STOCKFISH_REPO_NAME || 'Stockfish' }}
+
+      - name: Comment benchmark started
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          STOCKFISH_REPO: ${{ github.event.client_payload.stockfish_repo }}
+          PR: ${{ github.event.client_payload.pr }}
+          ACTOR: ${{ github.event.client_payload.actor }}
+          HEAD_SHA: ${{ github.event.client_payload.head_sha }}
+        run: |
+          gh pr comment "$PR" \
+            --repo "$STOCKFISH_REPO" \
+            --body "Stockfish speedtest benchmark started for $HEAD_SHA at the request of @$ACTOR. Baseline: official Stockfish master."
+
+      - name: Authenticate to GCP
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      - name: Install gcloud
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Run GCP benchmark
+        id: bench
+        env:
+          PR: ${{ github.event.client_payload.pr }}
+          STOCKFISH_REPO: ${{ github.event.client_payload.stockfish_repo }}
+          BENCH_ARCH: ${{ vars.BENCH_ARCH || 'x86-64-avx512' }}
+          BENCH_RUNS: ${{ vars.BENCH_RUNS || '3' }}
+          BENCH_SPEEDTEST_ARGS: ${{ vars.BENCH_SPEEDTEST_ARGS || '1 16 30' }}
+          GCP_ZONE: ${{ vars.GCP_ZONE || 'us-central1-a' }}
+          GCP_MACHINE_TYPE: ${{ vars.GCP_MACHINE_TYPE || 'n2-custom-2-2048' }}
+          GCP_MIN_CPU_PLATFORM: ${{ vars.GCP_MIN_CPU_PLATFORM || 'Intel Ice Lake' }}
+        run: |
+          set +e
+          ./gcp_spot_benchmark.py ignored \
+            --repo "https://github.com/$STOCKFISH_REPO.git" \
+            --test-pr "$PR" \
+            --arch "$BENCH_ARCH" \
+            --runs "$BENCH_RUNS" \
+            --speedtest-args "$BENCH_SPEEDTEST_ARGS" \
+            --zone "$GCP_ZONE" \
+            --machine-type "$GCP_MACHINE_TYPE" \
+            --min-cpu-platform "$GCP_MIN_CPU_PLATFORM" \
+            > benchmark-output.txt 2>&1
+          status=$?
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Comment benchmark result
+        if: always()
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          STOCKFISH_REPO: ${{ github.event.client_payload.stockfish_repo }}
+          PR: ${{ github.event.client_payload.pr }}
+          STATUS: ${{ steps.bench.outputs.status }}
+        run: |
+          {
+            if [ "$STATUS" = "0" ]; then
+              echo "Stockfish speedtest benchmark finished."
+            else
+              echo "Stockfish speedtest benchmark failed."
+            fi
+            echo
+            echo '```text'
+            if [ -f benchmark-output.txt ]; then
+              tail -n 160 benchmark-output.txt
+            else
+              echo "benchmark-output.txt was not produced"
+            fi
+            echo '```'
+          } > comment.md
+
+          gh pr comment "$PR" \
+            --repo "$STOCKFISH_REPO" \
+            --body-file comment.md
+
+      - name: Fail workflow if benchmark failed
+        if: steps.bench.outputs.status != '0'
+        run: exit 1
