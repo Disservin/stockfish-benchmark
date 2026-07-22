@@ -150,7 +150,7 @@ def install_dependencies(args: argparse.Namespace) -> None:
     gcloud_ssh(
         args.instance,
         args.zone,
-        "sudo DEBIAN_FRONTEND=noninteractive apt-get install -y build-essential ca-certificates git python3",
+        "sudo DEBIAN_FRONTEND=noninteractive apt-get install -y build-essential ca-certificates git python3 util-linux",
     )
 
 

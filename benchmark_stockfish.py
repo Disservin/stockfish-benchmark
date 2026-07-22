@@ -133,7 +133,9 @@ def parse_nps(output: str) -> int:
 
 def run_speedtest(binary: Path, speedtest_args: list[str]) -> int:
     completed = run(
-        [str(binary), "speedtest", *speedtest_args], cwd=binary.parent, capture=True
+        ["taskset", "-c", "0", str(binary), "speedtest", *speedtest_args],
+        cwd=binary.parent,
+        capture=True,
     )
     print(completed.stdout, end="" if completed.stdout.endswith("\n") else "\n")
     return parse_nps(completed.stdout)
