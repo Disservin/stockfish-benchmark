@@ -9,10 +9,12 @@ import shlex
 import subprocess
 import sys
 import time
+import uuid
 from pathlib import Path
 
 
 DEFAULT_REPO = "https://github.com/official-stockfish/Stockfish.git"
+DEFAULT_INSTANCE_PREFIX = "benchmark-avx512icl"
 
 
 def run(
@@ -192,7 +194,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--arch", help="Optional Stockfish make ARCH value, for example x86-64-avx512.")
     parser.add_argument("--runs", type=positive_int, default=3, help="Speedtest runs per commit. Default: 3.")
     parser.add_argument("--speedtest-args", default="1 16 30", help='Quoted arguments after speedtest. Default: "1 16 30"')
-    parser.add_argument("--instance", default="benchmark-avx512icl", help="GCP instance name.")
+    parser.add_argument(
+        "--instance",
+        default=f"{DEFAULT_INSTANCE_PREFIX}-{uuid.uuid4().hex[:8]}",
+        help="GCP instance name. Defaults to a unique benchmark-avx512icl-* name.",
+    )
     parser.add_argument("--zone", default="us-central1-a", help="GCP zone.")
     parser.add_argument("--machine-type", default="n2-custom-2-2048", help="GCP machine type.")
     parser.add_argument("--min-cpu-platform", default="Intel Ice Lake", help="Minimum CPU platform.")
