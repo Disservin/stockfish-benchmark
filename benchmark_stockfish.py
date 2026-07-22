@@ -111,7 +111,7 @@ def build_stockfish(source_dir: Path, jobs: int, arch: str | None) -> Path:
 
     run(["make", "clean"], cwd=src_dir)
 
-    cmd = ["make", f"-j{jobs}", "build"]
+    cmd = ["make", f"-j{jobs}", "profile-build"]
     if arch:
         cmd.append(f"ARCH={arch}")
     run(cmd, cwd=src_dir)
