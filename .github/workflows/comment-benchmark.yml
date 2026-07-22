@@ -65,17 +65,6 @@ jobs:
       - name: Checkout benchmark repo
         uses: actions/checkout@v7
 
-      - name: Comment benchmark started
-        env:
-          GH_TOKEN: ${{ secrets.STOCKFISH_COMMENT_TOKEN }}
-          TARGET_REPO: ${{ steps.command.outputs.target_repo }}
-          TARGET_PR: ${{ steps.command.outputs.target_pr }}
-          ACTOR: ${{ github.event.comment.user.login }}
-        run: |
-          gh pr comment "$TARGET_PR" \
-            --repo "$TARGET_REPO" \
-            --body "Stockfish speedtest benchmark started at the request of @$ACTOR. Baseline: official Stockfish master."
-
       - name: Authenticate to GCP
         uses: google-github-actions/auth@v3
         with:
@@ -119,22 +108,79 @@ jobs:
           TARGET_REPO: ${{ steps.command.outputs.target_repo }}
           TARGET_PR: ${{ steps.command.outputs.target_pr }}
           STATUS: ${{ steps.bench.outputs.status }}
+          ACTOR: ${{ github.event.comment.user.login }}
         run: |
-          {
-            if [ "$STATUS" = "0" ]; then
-              echo "Stockfish speedtest benchmark finished."
-            else
-              echo "Stockfish speedtest benchmark failed."
-            fi
-            echo
-            echo '```text'
-            if [ -f benchmark-output.txt ]; then
-              tail -n 160 benchmark-output.txt
-            else
-              echo "benchmark-output.txt was not produced"
-            fi
-            echo '```'
-          } > comment.md
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+
+          status = os.environ.get("STATUS")
+          actor = os.environ.get("ACTOR", "unknown")
+          output_path = Path("benchmark-output.txt")
+          fields = [
+              "Compiled by",
+              "Compilation architecture",
+              "Compilation settings",
+              "Compiler __VERSION__ macro",
+              "Large pages",
+              "User invocation",
+              "Filled invocation",
+              "Available processors",
+              "Thread count",
+              "Thread binding",
+              "TT size [MiB]",
+          ]
+
+          def table_escape(value: str) -> str:
+              return value.replace("|", "\\|")
+
+          lines = output_path.read_text(errors="replace").splitlines() if output_path.exists() else []
+          field_values = {}
+          for line in lines:
+              for field in fields:
+                  prefix = f"{field}"
+                  if line.startswith(prefix) and ":" in line:
+                      field_values[field] = line.split(":", 1)[1].strip()
+
+          summary = []
+          for index in range(len(lines) - 1, -1, -1):
+              if lines[index] == "Summary":
+                  for line in lines[index:]:
+                      summary.append(line)
+                      if line.startswith("P(speedup > 0):"):
+                          break
+                  break
+
+          with open("comment.md", "w", encoding="utf-8") as comment:
+              if status == "0":
+                  print("Stockfish speedtest benchmark finished.", file=comment)
+              else:
+                  print("Stockfish speedtest benchmark failed.", file=comment)
+              print(f"Benchmark run at the request of @{actor}. Baseline: official Stockfish master.", file=comment)
+              print(file=comment)
+
+              if field_values:
+                  print("### Run Details", file=comment)
+                  print("| Field | Value |", file=comment)
+                  print("| --- | --- |", file=comment)
+                  for field in fields:
+                      if field in field_values:
+                          print(f"| {field} | {table_escape(field_values[field])} |", file=comment)
+                  print(file=comment)
+
+              if summary:
+                  print("### Result", file=comment)
+                  print("```text", file=comment)
+                  print("\n".join(summary), file=comment)
+                  print("```", file=comment)
+              elif lines:
+                  print("### Raw Output Excerpt", file=comment)
+                  print("```text", file=comment)
+                  print("\n".join(lines[-160:]), file=comment)
+                  print("```", file=comment)
+              else:
+                  print("benchmark-output.txt was not produced", file=comment)
+          PY
 
           gh pr comment "$TARGET_PR" \
             --repo "$TARGET_REPO" \
