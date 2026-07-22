@@ -1,0 +1,145 @@
+name: Comment Benchmark
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  issues: read
+  id-token: "write"
+
+concurrency:
+  group: comment-benchmark-${{ github.event.comment.id }}
+  cancel-in-progress: false
+
+jobs:
+  benchmark:
+    if: github.event.issue.number == 1 && startsWith(github.event.comment.body, '/benchmark ')
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Check benchmark allowlist
+        env:
+          ACTOR: ${{ github.event.comment.user.login }}
+          ALLOWED_USERS: ${{ vars.BENCHMARK_ALLOWED_USERS }}
+        run: |
+          if [ -z "$ALLOWED_USERS" ]; then
+            echo "BENCHMARK_ALLOWED_USERS is empty; refusing to trigger benchmark"
+            exit 1
+          fi
+
+          if ! printf '%s' "$ALLOWED_USERS" | tr ',' '\n' | sed 's/^ *//;s/ *$//' | grep -Fx "$ACTOR"; then
+            echo "@$ACTOR is not allowed to trigger benchmarks"
+            exit 1
+          fi
+
+      - name: Parse benchmark command
+        id: command
+        env:
+          COMMENT_BODY: ${{ github.event.comment.body }}
+        run: |
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import os
+          import re
+          import sys
+
+          body = os.environ["COMMENT_BODY"].strip()
+          parts = body.split()
+          if len(parts) != 2 or parts[0] != "/benchmark":
+              print("Expected exactly: /benchmark https://github.com/OWNER/REPO/pull/NUMBER", file=sys.stderr)
+              raise SystemExit(1)
+
+          match = re.fullmatch(r"https://github\.com/([^/]+)/([^/]+)/pull/([0-9]+)", parts[1])
+          if not match:
+              print("Benchmark URL must look like: https://github.com/OWNER/REPO/pull/NUMBER", file=sys.stderr)
+              raise SystemExit(1)
+
+          owner, repo, pr = match.groups()
+          print(f"target_repo={owner}/{repo}")
+          print(f"target_repo_url=https://github.com/{owner}/{repo}.git")
+          print(f"target_pr={pr}")
+          PY
+
+      - name: Checkout benchmark repo
+        uses: actions/checkout@v4
+
+      - name: Comment benchmark started
+        env:
+          GH_TOKEN: ${{ secrets.STOCKFISH_COMMENT_TOKEN }}
+          TARGET_REPO: ${{ steps.command.outputs.target_repo }}
+          TARGET_PR: ${{ steps.command.outputs.target_pr }}
+          ACTOR: ${{ github.event.comment.user.login }}
+        run: |
+          gh pr comment "$TARGET_PR" \
+            --repo "$TARGET_REPO" \
+            --body "Stockfish speedtest benchmark started at the request of @$ACTOR. Baseline: official Stockfish master."
+
+      - name: Authenticate to GCP
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      - name: Install gcloud
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Run GCP benchmark
+        id: bench
+        env:
+          TARGET_REPO_URL: ${{ steps.command.outputs.target_repo_url }}
+          TARGET_PR: ${{ steps.command.outputs.target_pr }}
+          BENCH_ARCH: ${{ vars.BENCH_ARCH || 'x86-64-avx512icl' }}
+          BENCH_RUNS: ${{ vars.BENCH_RUNS || '1' }}
+          BENCH_SPEEDTEST_ARGS: ${{ vars.BENCH_SPEEDTEST_ARGS || '1 16 5' }}
+          GCP_ZONE: ${{ vars.GCP_ZONE || 'us-central1-a' }}
+          GCP_MACHINE_TYPE: ${{ vars.GCP_MACHINE_TYPE || 'n2-custom-2-2048' }}
+          GCP_MIN_CPU_PLATFORM: ${{ vars.GCP_MIN_CPU_PLATFORM || 'Intel Ice Lake' }}
+        run: |
+          set +e
+          ./gcp_spot_benchmark.py ignored \
+            --repo "$TARGET_REPO_URL" \
+            --test-pr "$TARGET_PR" \
+            --arch "$BENCH_ARCH" \
+            --runs "$BENCH_RUNS" \
+            --speedtest-args "$BENCH_SPEEDTEST_ARGS" \
+            --zone "$GCP_ZONE" \
+            --machine-type "$GCP_MACHINE_TYPE" \
+            --min-cpu-platform "$GCP_MIN_CPU_PLATFORM" \
+            > benchmark-output.txt 2>&1
+          status=$?
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Comment benchmark result
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.STOCKFISH_COMMENT_TOKEN }}
+          TARGET_REPO: ${{ steps.command.outputs.target_repo }}
+          TARGET_PR: ${{ steps.command.outputs.target_pr }}
+          STATUS: ${{ steps.bench.outputs.status }}
+        run: |
+          {
+            if [ "$STATUS" = "0" ]; then
+              echo "Stockfish speedtest benchmark finished."
+            else
+              echo "Stockfish speedtest benchmark failed."
+            fi
+            echo
+            echo '```text'
+            if [ -f benchmark-output.txt ]; then
+              tail -n 160 benchmark-output.txt
+            else
+              echo "benchmark-output.txt was not produced"
+            fi
+            echo '```'
+          } > comment.md
+
+          gh pr comment "$TARGET_PR" \
+            --repo "$TARGET_REPO" \
+            --body-file comment.md
+
+      - name: Fail workflow if benchmark failed
+        if: steps.bench.outputs.status != '0'
+        run: exit 1
