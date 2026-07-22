@@ -80,7 +80,7 @@ jobs:
           TARGET_REPO_URL: ${{ steps.command.outputs.target_repo_url }}
           TARGET_PR: ${{ steps.command.outputs.target_pr }}
           BENCH_ARCH: ${{ vars.BENCH_ARCH || 'x86-64-avx512icl' }}
-          BENCH_RUNS: ${{ vars.BENCH_RUNS || '1' }}
+          BENCH_RUNS: ${{ vars.BENCH_RUNS || '20' }}
           BENCH_SPEEDTEST_ARGS: ${{ vars.BENCH_SPEEDTEST_ARGS || '1 16 5' }}
           GCP_ZONE: ${{ vars.GCP_ZONE || 'us-central1-a' }}
           GCP_MACHINE_TYPE: ${{ vars.GCP_MACHINE_TYPE || 'n2-custom-2-2048' }}
@@ -144,11 +144,9 @@ jobs:
               "Compilation settings",
               "Compiler __VERSION__ macro",
               "Large pages",
-              "User invocation",
               "Filled invocation",
               "Available processors",
               "Thread count",
-              "Thread binding",
               "TT size [MiB]",
           ]
 
