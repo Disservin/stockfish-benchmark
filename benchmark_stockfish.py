@@ -159,10 +159,8 @@ def benchmark_target(args: argparse.Namespace, target: Target) -> Result:
 def print_summary(base: Result, test: Result) -> None:
     diff = test.mean_nps - base.mean_nps
     diff_stdev = math.sqrt(base.stdev_nps**2 + test.stdev_nps**2)
-    diff_stderr = math.sqrt(
-        base.stdev_nps**2 / len(base.nps_values)
-        + test.stdev_nps**2 / len(test.nps_values)
-    )
+    paired_diffs = [test_nps - base_nps for base_nps, test_nps in zip(base.nps_values, test.nps_values)]
+    diff_stderr = statistics.stdev(paired_diffs) / math.sqrt(len(paired_diffs)) if len(paired_diffs) >= 2 else 0.0
     if diff_stderr == 0:
         probability_speedup = 1.0 if diff > 0 else 0.5 if diff == 0 else 0.0
     else:
