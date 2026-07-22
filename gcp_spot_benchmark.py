@@ -8,19 +8,60 @@ import re
 import shlex
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 
 DEFAULT_REPO = "https://github.com/official-stockfish/Stockfish.git"
 
 
-def run(cmd: list[str], check: bool = True) -> subprocess.CompletedProcess[str]:
+def run(
+    cmd: list[str], check: bool = True, capture: bool = False
+) -> subprocess.CompletedProcess[str]:
     print(f"$ {' '.join(cmd)}", flush=True)
-    return subprocess.run(cmd, check=check, text=True)
+    return subprocess.run(
+        cmd,
+        check=check,
+        text=True,
+        stdout=subprocess.PIPE if capture else None,
+        stderr=subprocess.STDOUT if capture else None,
+    )
+
+
+def instance_status(instance: str, zone: str) -> str | None:
+    completed = run(
+        [
+            "gcloud",
+            "compute",
+            "instances",
+            "describe",
+            instance,
+            f"--zone={zone}",
+            "--format=get(status)",
+        ],
+        check=False,
+        capture=True,
+    )
+    if completed.returncode != 0:
+        return None
+    return completed.stdout.strip()
+
+
+def raise_if_instance_gone(instance: str, zone: str) -> None:
+    status = instance_status(instance, zone)
+    if status is None:
+        raise SystemExit(
+            f"GCP instance {instance} is no longer visible in {zone}; "
+            "the spot VM was likely preempted/deleted."
+        )
+    if status != "RUNNING":
+        raise SystemExit(
+            f"GCP instance {instance} is {status}; the spot VM is no longer running."
+        )
 
 
 def gcloud_ssh(instance: str, zone: str, command: str) -> None:
-    run(
+    completed = run(
         [
             "gcloud",
             "compute",
@@ -29,8 +70,12 @@ def gcloud_ssh(instance: str, zone: str, command: str) -> None:
             f"--zone={zone}",
             "--command",
             command,
-        ]
+        ],
+        check=False,
     )
+    if completed.returncode != 0:
+        raise_if_instance_gone(instance, zone)
+        raise subprocess.CalledProcessError(completed.returncode, completed.args)
 
 
 def create_instance(args: argparse.Namespace) -> None:
@@ -73,16 +118,26 @@ def copy_runner(args: argparse.Namespace) -> str:
         raise SystemExit(f"Local runner not found: {local_runner}")
 
     remote_runner = "/tmp/benchmark_stockfish.py"
-    run(
-        [
-            "gcloud",
-            "compute",
-            "scp",
-            str(local_runner),
-            f"{args.instance}:{remote_runner}",
-            f"--zone={args.zone}",
-        ]
-    )
+    scp_cmd = [
+        "gcloud",
+        "compute",
+        "scp",
+        str(local_runner),
+        f"{args.instance}:{remote_runner}",
+        f"--zone={args.zone}",
+    ]
+    for attempt in range(1, 4):
+        completed = run(scp_cmd, check=False)
+        if completed.returncode == 0:
+            break
+
+        raise_if_instance_gone(args.instance, args.zone)
+        if attempt == 3:
+            raise subprocess.CalledProcessError(completed.returncode, completed.args)
+
+        print(f"scp failed; retrying ({attempt + 1}/3) after 10 seconds", flush=True)
+        time.sleep(10)
+
     return remote_runner
 
 
