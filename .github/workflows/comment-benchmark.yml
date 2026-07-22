@@ -130,6 +130,7 @@ jobs:
           TARGET_PR: ${{ steps.command.outputs.target_pr }}
           STATUS: ${{ steps.bench.outputs.status }}
           ACTOR: ${{ github.event.comment.user.login }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           python3 - <<'PY'
           import os
@@ -137,6 +138,7 @@ jobs:
 
           status = os.environ.get("STATUS")
           actor = os.environ.get("ACTOR", "unknown")
+          run_url = os.environ["RUN_URL"]
           output_path = Path("benchmark-output.txt")
           fields = [
               "Compiled by",
@@ -177,6 +179,10 @@ jobs:
                   print("Stockfish speedtest benchmark failed.", file=comment)
               print(f"Benchmark run at the request of @{actor}. Baseline: official Stockfish master.", file=comment)
               print(file=comment)
+
+              if status != "0":
+                  print(f"See the [GitHub Actions run]({run_url}) for details.", file=comment)
+                  raise SystemExit(0)
 
               if field_values:
                   print("### Run Details", file=comment)
