@@ -95,6 +95,8 @@ def create_instance(args: argparse.Namespace) -> None:
             "--instance-termination-action=DELETE",
             f"--image-family={args.image_family}",
             f"--image-project={args.image_project}",
+            "--no-service-account",
+            "--no-scopes",
         ]
     )
 
