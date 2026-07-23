@@ -211,7 +211,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--min-cpu-platform", default="Intel Ice Lake", help="Minimum CPU platform.")
     parser.add_argument("--image-family", default="debian-13", help="GCP image family.")
     parser.add_argument("--image-project", default="debian-cloud", help="GCP image project.")
-    parser.add_argument("--remote-source-dir", default="/tmp/stockfish-src", help="Remote Stockfish checkout directory.")
+    parser.add_argument("--remote-source-dir", default="/tmp/stockfish-src", help="Remote Stockfish cache directory. Separate base/ and test/ checkouts are stored below it.")
     parser.add_argument("--keep-instance", action="store_true", help="Do not delete the VM after the benchmark.")
     return parser.parse_args(argv)
 

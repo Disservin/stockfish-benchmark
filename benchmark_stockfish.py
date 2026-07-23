@@ -74,6 +74,10 @@ def ensure_stockfish_repo(repo_url: str, source_dir: Path) -> None:
     run(["git", "fetch", "--tags", "origin"], cwd=source_dir)
 
 
+def source_dir_for_target(cache_dir: Path, target: Target) -> Path:
+    return cache_dir / target.label
+
+
 def fetch_ref(source_dir: Path, target: Target) -> str:
     fetch = run(
         ["git", "fetch", "--tags", target.repo_url, target.ref],
@@ -150,8 +154,11 @@ def run_speedtest(binary: Path, speedtest_args: list[str]) -> int:
 
 
 def benchmark_target(args: argparse.Namespace, target: Target) -> Result:
-    resolved_commit = checkout_target(args.source_dir, target)
-    binary = build_stockfish(args.source_dir, args.jobs, args.arch)
+    source_dir = source_dir_for_target(args.source_dir, target)
+    args.source_dir.mkdir(parents=True, exist_ok=True)
+    ensure_stockfish_repo(target.repo_url, source_dir)
+    resolved_commit = checkout_target(source_dir, target)
+    binary = build_stockfish(source_dir, args.jobs, args.arch)
 
     nps_values = []
     for run_index in range(1, args.runs + 1):
@@ -176,13 +183,14 @@ def print_summary(base: Result, test: Result) -> None:
     pct = 0.0 if base.mean_nps == 0 else diff * 100.0 / base.mean_nps
 
     print("\nSummary")
-    print("name  ref           resolved                                  mean nps")
+    print("name  ref           resolved                                  runs          mean nps")
     for name, result in (("base", base), ("test", test)):
         print(
             f"{name:4}  "
             f"{result.target.display_ref[:12]:12}  "
             f"{result.resolved_commit[:40]:40}  "
-            f"{result.mean_nps:10.0f} +/- {result.stdev_nps:.0f}"
+            f"{len(result.nps_values):4d}  "
+            f"{result.mean_nps:16.0f} +/- {result.stdev_nps:.0f}"
         )
 
     print(f"\nDifference: {diff:+.0f} +/- {diff_stdev:.0f} nodes/second ({pct:+.3f}%)")
@@ -226,7 +234,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         "--source-dir",
         type=Path,
         default=Path(".stockfish-src"),
-        help="Local Stockfish checkout directory.",
+        help="Local Stockfish cache directory. Separate base/ and test/ checkouts are stored below it.",
     )
     parser.add_argument(
         "--arch", help="Optional Stockfish make ARCH value, for example x86-64-bmi2."
@@ -266,7 +274,6 @@ def main(argv: list[str]) -> int:
     args.speedtest_args = shlex.split(args.speedtest_args)
 
     base_target, test_target = make_targets(args)
-    ensure_stockfish_repo(base_target.repo_url, args.source_dir)
     base = benchmark_target(args, base_target)
     test = benchmark_target(args, test_target)
     print_summary(base, test)
