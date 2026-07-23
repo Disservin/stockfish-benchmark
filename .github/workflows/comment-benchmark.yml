@@ -56,17 +56,45 @@ jobs:
           COMMENT_BODY: ${{ github.event.comment.body }}
         run: |
           python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import argparse
           import os
           import re
+          import shlex
           import sys
 
           body = os.environ["COMMENT_BODY"].strip()
-          parts = body.split()
-          if len(parts) != 2 or parts[0] != "/benchmark":
-              print("Expected exactly: /benchmark https://github.com/OWNER/REPO/pull/NUMBER", file=sys.stderr)
+          try:
+              parts = shlex.split(body)
+          except ValueError as exc:
+              print(f"Could not parse /benchmark command: {exc}", file=sys.stderr)
               raise SystemExit(1)
 
-          match = re.fullmatch(r"https://github\.com/([^/]+)/([^/]+)/pull/([0-9]+)", parts[1])
+          if not parts or parts[0] != "/benchmark":
+              print("Expected: /benchmark https://github.com/OWNER/REPO/pull/NUMBER [--arch ARCH] [--runs RUNS] [--speedtest-args ARGS...]", file=sys.stderr)
+              raise SystemExit(1)
+
+          def positive_int(value):
+              parsed = int(value)
+              if parsed < 1:
+                  raise argparse.ArgumentTypeError("must be at least 1")
+              return parsed
+
+          parser = argparse.ArgumentParser(prog="/benchmark")
+          parser.add_argument("pull_url")
+          parser.add_argument("--arch")
+          parser.add_argument("--runs", type=positive_int)
+          parser.add_argument(
+              "--speedtest-args",
+              nargs="+",
+              help="Arguments after Stockfish speedtest. Put this option last unless the value is quoted.",
+          )
+          try:
+              command = parser.parse_args(parts[1:])
+          except SystemExit:
+              print("Expected: /benchmark https://github.com/OWNER/REPO/pull/NUMBER [--arch ARCH] [--runs RUNS] [--speedtest-args ARGS...]", file=sys.stderr)
+              raise
+
+          match = re.fullmatch(r"https://github\.com/([^/]+)/([^/]+)/pull/([0-9]+)", command.pull_url)
           if not match:
               print("Benchmark URL must look like: https://github.com/OWNER/REPO/pull/NUMBER", file=sys.stderr)
               raise SystemExit(1)
@@ -75,6 +103,13 @@ jobs:
           print(f"target_repo={owner}/{repo}")
           print(f"target_repo_url=https://github.com/{owner}/{repo}.git")
           print(f"target_pr={pr}")
+          if command.arch:
+              print(f"benchmark_arch={command.arch}")
+          if command.runs:
+              print(f"benchmark_runs={command.runs}")
+          if command.speedtest_args:
+              speedtest_args = command.speedtest_args[0] if len(command.speedtest_args) == 1 else shlex.join(command.speedtest_args)
+              print(f"benchmark_speedtest_args={speedtest_args}")
           PY
 
       - name: Checkout benchmark repo
@@ -94,9 +129,9 @@ jobs:
         env:
           TARGET_REPO_URL: ${{ steps.command.outputs.target_repo_url }}
           TARGET_PR: ${{ steps.command.outputs.target_pr }}
-          BENCH_ARCH: ${{ vars.BENCH_ARCH || 'x86-64-avx512icl' }}
-          BENCH_RUNS: ${{ vars.BENCH_RUNS || '40' }}
-          BENCH_SPEEDTEST_ARGS: ${{ vars.BENCH_SPEEDTEST_ARGS || '1 16 5' }}
+          BENCH_ARCH: ${{ steps.command.outputs.benchmark_arch || vars.BENCH_ARCH || 'x86-64-avx512icl' }}
+          BENCH_RUNS: ${{ steps.command.outputs.benchmark_runs || vars.BENCH_RUNS || '40' }}
+          BENCH_SPEEDTEST_ARGS: ${{ steps.command.outputs.benchmark_speedtest_args || vars.BENCH_SPEEDTEST_ARGS || '1 16 5' }}
           GCP_ZONE: ${{ vars.GCP_ZONE || 'us-central1-a' }}
           GCP_MACHINE_TYPE: ${{ vars.GCP_MACHINE_TYPE || 'c4-standard-2' }}
           GCP_MIN_CPU_PLATFORM: ${{ vars.GCP_MIN_CPU_PLATFORM || 'Intel Emerald Rapids' }}
