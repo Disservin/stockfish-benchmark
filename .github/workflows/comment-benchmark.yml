@@ -243,29 +243,29 @@ jobs:
 
           def format_int(value: str) -> str:
               try:
-                  return f"{int(round(float(value))):,}"
+                  return str(int(round(float(value))))
               except ValueError:
-                  return value
+                  return str(value)
 
           def format_signed_int(value: str) -> str:
               try:
                   parsed = int(round(float(value)))
               except ValueError:
-                  return value
-              return f"{parsed:+,}"
+                  return str(value)
+              return f"{parsed:+}"
 
           def format_percent(value: str, digits: int = 3) -> str:
               try:
                   parsed = float(value)
               except ValueError:
-                  return value
+                  return str(value)
               return f"{parsed:+.{digits}f}%"
 
           def format_probability(value: str) -> str:
               try:
                   return f"{float(value) * 100.0:.1f}%"
               except ValueError:
-                  return value
+                  return str(value)
 
           sensitive_values = [
               os.environ.get("GCP_ZONE"),
@@ -374,7 +374,7 @@ jobs:
                           value = f"{compiler_match.group(1)} {compiler_match.group(2)}" if compiler_match else value
                       elif field == "Large pages":
                           value = f"large pages: {value}"
-                      run_details.append(f"`{value}`" if field != "Large pages" else value)
+                      run_details.append(f"`{value}`")
 
                   if run_details:
                       print(" | ".join(run_details), file=comment)
@@ -389,9 +389,11 @@ jobs:
                           file=comment,
                       )
                   print(file=comment)
-                  print(f"**Diff:** {format_signed_int(benchmark_report['diff_nps'])} ±{format_int(benchmark_report['diff_ci95_nps'])} nps  ", file=comment)
-                  print(f"**Speedup:** {format_percent(benchmark_report['speedup_percent'])} ±{format_percent(benchmark_report['speedup_ci95_percent']).lstrip('+')}  ", file=comment)
-                  print(f"**P(speedup > 0):** {format_probability(benchmark_report['probability_speedup'])}", file=comment)
+                  print("```text", file=comment)
+                  print(f"Diff: {format_signed_int(benchmark_report['diff_nps'])} ±{format_int(benchmark_report['diff_ci95_nps'])} nps", file=comment)
+                  print(f"Speedup: {format_percent(benchmark_report['speedup_percent'])} ±{format_percent(benchmark_report['speedup_ci95_percent']).lstrip('+')}", file=comment)
+                  print(f"P(speedup > 0): {format_probability(benchmark_report['probability_speedup'])}", file=comment)
+                  print("```", file=comment)
               elif summary:
                   if field_values:
                       print("### Run Details", file=comment)
