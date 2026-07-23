@@ -98,8 +98,8 @@ jobs:
           BENCH_RUNS: ${{ vars.BENCH_RUNS || '20' }}
           BENCH_SPEEDTEST_ARGS: ${{ vars.BENCH_SPEEDTEST_ARGS || '1 16 5' }}
           GCP_ZONE: ${{ vars.GCP_ZONE || 'us-central1-a' }}
-          GCP_MACHINE_TYPE: ${{ vars.GCP_MACHINE_TYPE || 'n2-custom-2-2048' }}
-          GCP_MIN_CPU_PLATFORM: ${{ vars.GCP_MIN_CPU_PLATFORM || 'Intel Ice Lake' }}
+          GCP_MACHINE_TYPE: ${{ vars.GCP_MACHINE_TYPE || 'c4-standard-2' }}
+          GCP_MIN_CPU_PLATFORM: ${{ vars.GCP_MIN_CPU_PLATFORM || 'Intel Emerald Rapids' }}
         run: |
           cat > filter-benchmark-log.py <<'PY'
           import sys

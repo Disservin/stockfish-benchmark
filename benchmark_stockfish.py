@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import math
 import os
+import platform
 import re
 import shlex
 import statistics
@@ -131,9 +132,16 @@ def parse_nps(output: str) -> int:
     return int(match.group(1).replace(",", ""))
 
 
+def speedtest_command(binary: Path, speedtest_args: list[str]) -> list[str]:
+    cmd = [str(binary), "speedtest", *speedtest_args]
+    if platform.system() == "Linux":
+        return ["taskset", "-c", "0", *cmd]
+    return cmd
+
+
 def run_speedtest(binary: Path, speedtest_args: list[str]) -> int:
     completed = run(
-        ["taskset", "-c", "0", str(binary), "speedtest", *speedtest_args],
+        speedtest_command(binary, speedtest_args),
         cwd=binary.parent,
         capture=True,
     )

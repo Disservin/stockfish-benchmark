@@ -80,25 +80,30 @@ def gcloud_ssh(instance: str, zone: str, command: str) -> None:
         raise subprocess.CalledProcessError(completed.returncode, completed.args)
 
 
+def create_instance_command(args: argparse.Namespace) -> list[str]:
+    cmd = [
+        "gcloud",
+        "compute",
+        "instances",
+        "create",
+        args.instance,
+        f"--zone={args.zone}",
+        f"--machine-type={args.machine_type}",
+        f"--min-cpu-platform={args.min_cpu_platform}",
+        "--provisioning-model=SPOT",
+        "--instance-termination-action=DELETE",
+        f"--image-family={args.image_family}",
+        f"--image-project={args.image_project}",
+        "--no-service-account",
+        "--no-scopes",
+    ]
+    if args.machine_type.startswith("c4-"):
+        cmd.append("--advanced-machine-features=turbo-mode=ALL_CORE_MAX")
+    return cmd
+
+
 def create_instance(args: argparse.Namespace) -> None:
-    run(
-        [
-            "gcloud",
-            "compute",
-            "instances",
-            "create",
-            args.instance,
-            f"--zone={args.zone}",
-            f"--machine-type={args.machine_type}",
-            f"--min-cpu-platform={args.min_cpu_platform}",
-            "--provisioning-model=SPOT",
-            "--instance-termination-action=DELETE",
-            f"--image-family={args.image_family}",
-            f"--image-project={args.image_project}",
-            "--no-service-account",
-            "--no-scopes",
-        ]
-    )
+    run(create_instance_command(args))
 
 
 def delete_instance(args: argparse.Namespace) -> None:
@@ -202,7 +207,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         help="GCP instance name. Defaults to a unique benchmark-avx512icl-* name.",
     )
     parser.add_argument("--zone", default="us-central1-a", help="GCP zone.")
-    parser.add_argument("--machine-type", default="n2-custom-2-2048", help="GCP machine type.")
+    parser.add_argument("--machine-type", default="c4-standard-2", help="GCP machine type.")
     parser.add_argument("--min-cpu-platform", default="Intel Ice Lake", help="Minimum CPU platform.")
     parser.add_argument("--image-family", default="debian-13", help="GCP image family.")
     parser.add_argument("--image-project", default="debian-cloud", help="GCP image project.")
