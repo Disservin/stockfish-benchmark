@@ -98,7 +98,7 @@ def create_instance_command(args: argparse.Namespace) -> list[str]:
         "--no-scopes",
     ]
     if args.machine_type.startswith("c4-"):
-        cmd.append("--advanced-machine-features=turbo-mode=ALL_CORE_MAX")
+        cmd.append("--turbo-mode=ALL_CORE_MAX")
     return cmd
 
 
