@@ -133,7 +133,7 @@ jobs:
           BENCH_RUNS: ${{ steps.command.outputs.benchmark_runs || vars.BENCH_RUNS || '40' }}
           BENCH_SPEEDTEST_ARGS: ${{ steps.command.outputs.benchmark_speedtest_args || vars.BENCH_SPEEDTEST_ARGS || '1 16 5' }}
           GCP_ZONE: ${{ vars.GCP_ZONE || 'us-central1-a' }}
-          GCP_MACHINE_TYPE: ${{ vars.GCP_MACHINE_TYPE || 'c4-standard-2' }}
+          GCP_MACHINE_TYPE: ${{ vars.GCP_MACHINE_TYPE || 'c4-highcpu-2' }}
           GCP_MIN_CPU_PLATFORM: ${{ vars.GCP_MIN_CPU_PLATFORM || 'Intel Emerald Rapids' }}
         run: |
           cat > filter-benchmark-log.py <<'PY'

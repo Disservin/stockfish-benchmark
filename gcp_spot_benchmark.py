@@ -207,7 +207,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         help="GCP instance name. Defaults to a unique benchmark-avx512icl-* name.",
     )
     parser.add_argument("--zone", default="us-central1-a", help="GCP zone.")
-    parser.add_argument("--machine-type", default="c4-standard-2", help="GCP machine type.")
+    parser.add_argument("--machine-type", default="c4-highcpu-2", help="GCP machine type.")
     parser.add_argument("--min-cpu-platform", default="Intel Ice Lake", help="Minimum CPU platform.")
     parser.add_argument("--image-family", default="debian-13", help="GCP image family.")
     parser.add_argument("--image-project", default="debian-cloud", help="GCP image project.")
