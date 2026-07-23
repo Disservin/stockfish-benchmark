@@ -178,19 +178,14 @@ def benchmark_target(args: argparse.Namespace, target: Target) -> Result:
 
 def benchmark_report(base: Result, test: Result) -> dict[str, object]:
     diff = test.mean_nps - base.mean_nps
-    paired_diffs = [
-        test_nps - base_nps for base_nps, test_nps in zip(base.nps_values, test.nps_values)
-    ]
-    diff_ci95 = ci95_mean(paired_diffs)
-    diff_stderr = (
-        statistics.stdev(paired_diffs) / math.sqrt(len(paired_diffs))
-        if len(paired_diffs) >= 2
-        else 0.0
-    )
+    diff_stderr = mean_stderr(base.nps_values, test.nps_values)
+    diff_ci95 = 1.96 * diff_stderr
+
     if diff_stderr == 0:
         probability_speedup = 1.0 if diff > 0 else 0.5 if diff == 0 else 0.0
     else:
         probability_speedup = normal_cdf(diff / diff_stderr)
+
     pct = 0.0 if base.mean_nps == 0 else diff * 100.0 / base.mean_nps
     speedup_ci95 = 0.0 if base.mean_nps == 0 else 100.0 * diff_ci95 / base.mean_nps
 
@@ -203,6 +198,12 @@ def benchmark_report(base: Result, test: Result) -> dict[str, object]:
         "speedup_ci95_percent": speedup_ci95,
         "probability_speedup": probability_speedup,
     }
+
+
+def mean_stderr(base_values: list[int], test_values: list[int]) -> float:
+    base_variance = statistics.variance(base_values) if len(base_values) >= 2 else 0.0
+    test_variance = statistics.variance(test_values) if len(test_values) >= 2 else 0.0
+    return math.sqrt(base_variance / len(base_values) + test_variance / len(test_values))
 
 
 def result_report(result: Result) -> dict[str, object]:

@@ -263,9 +263,10 @@ jobs:
 
           def format_probability(value: str) -> str:
               try:
-                  return f"{float(value) * 100.0:.1f}%"
+                  parsed = float(value)
               except ValueError:
                   return str(value)
+              return f"{parsed * 100.0:.2f}%"
 
           sensitive_values = [
               os.environ.get("GCP_ZONE"),
