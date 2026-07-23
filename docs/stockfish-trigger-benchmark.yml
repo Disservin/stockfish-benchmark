@@ -1,0 +1,67 @@
+# Copy this file to the Stockfish repository as:
+# .github/workflows/trigger-benchmark.yml
+
+name: Trigger Benchmark
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  issues: read
+  pull-requests: read
+
+jobs:
+  trigger:
+    if: github.event.issue.pull_request && startsWith(github.event.comment.body, '/bench')
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check benchmark allowlist
+        env:
+          ACTOR: ${{ github.event.comment.user.login }}
+          ALLOWED_USERS: ${{ vars.BENCHMARK_ALLOWED_USERS }}
+        run: |
+          if [ -z "$ALLOWED_USERS" ]; then
+            echo "BENCHMARK_ALLOWED_USERS is empty; refusing to trigger benchmark"
+            exit 1
+          fi
+
+          if ! printf '%s' "$ALLOWED_USERS" | tr ',' '\n' | sed 's/^ *//;s/ *$//' | grep -Fx "$ACTOR"; then
+            echo "@$ACTOR is not allowed to trigger benchmarks"
+            exit 1
+          fi
+
+      - name: Read PR metadata
+        id: pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+          STOCKFISH_REPO: ${{ github.repository }}
+          PR: ${{ github.event.issue.number }}
+        run: |
+          echo "head_sha=$(gh api "repos/$STOCKFISH_REPO/pulls/$PR" --jq .head.sha)" >> "$GITHUB_OUTPUT"
+
+      - name: Dispatch benchmark run
+        env:
+          GH_TOKEN: ${{ secrets.BENCHMARK_REPO_DISPATCH_TOKEN }}
+          BENCHMARK_OWNER: ${{ vars.BENCHMARK_OWNER }}
+          BENCHMARK_REPO_NAME: ${{ vars.BENCHMARK_REPO_NAME }}
+          STOCKFISH_REPO: ${{ github.repository }}
+          PR: ${{ github.event.issue.number }}
+          COMMENT_ID: ${{ github.event.comment.id }}
+          ACTOR: ${{ github.event.comment.user.login }}
+          HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
+        run: |
+          if [ -z "$BENCHMARK_OWNER" ] || [ -z "$BENCHMARK_REPO_NAME" ]; then
+            echo "BENCHMARK_OWNER and BENCHMARK_REPO_NAME must be set"
+            exit 1
+          fi
+
+          gh api "repos/$BENCHMARK_OWNER/$BENCHMARK_REPO_NAME/dispatches" \
+            -f event_type=stockfish-pr-benchmark \
+            -F client_payload[stockfish_repo]="$STOCKFISH_REPO" \
+            -F client_payload[pr]="$PR" \
+            -F client_payload[comment_id]="$COMMENT_ID" \
+            -F client_payload[actor]="$ACTOR" \
+            -F client_payload[head_sha]="$HEAD_SHA"

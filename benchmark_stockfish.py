@@ -44,6 +44,10 @@ class Result:
             return 0.0
         return statistics.stdev(self.nps_values)
 
+    @property
+    def ci95_nps(self) -> float:
+        return ci95_mean(self.nps_values)
+
 
 def run(
     cmd: list[str],
@@ -173,28 +177,42 @@ def benchmark_target(args: argparse.Namespace, target: Target) -> Result:
 
 def print_summary(base: Result, test: Result) -> None:
     diff = test.mean_nps - base.mean_nps
-    diff_stdev = math.sqrt(base.stdev_nps**2 + test.stdev_nps**2)
-    paired_diffs = [test_nps - base_nps for base_nps, test_nps in zip(base.nps_values, test.nps_values)]
-    diff_stderr = statistics.stdev(paired_diffs) / math.sqrt(len(paired_diffs)) if len(paired_diffs) >= 2 else 0.0
+    paired_diffs = [
+        test_nps - base_nps for base_nps, test_nps in zip(base.nps_values, test.nps_values)
+    ]
+    diff_ci95 = ci95_mean(paired_diffs)
+    diff_stderr = (
+        statistics.stdev(paired_diffs) / math.sqrt(len(paired_diffs))
+        if len(paired_diffs) >= 2
+        else 0.0
+    )
     if diff_stderr == 0:
         probability_speedup = 1.0 if diff > 0 else 0.5 if diff == 0 else 0.0
     else:
         probability_speedup = normal_cdf(diff / diff_stderr)
     pct = 0.0 if base.mean_nps == 0 else diff * 100.0 / base.mean_nps
+    speedup_ci95 = 0.0 if base.mean_nps == 0 else 100.0 * diff_ci95 / base.mean_nps
 
     print("\nSummary")
-    print("name  ref           resolved                                  runs          mean nps")
+    print("name  ref           resolved                                  runs          mean nps        95% CI")
     for name, result in (("base", base), ("test", test)):
         print(
             f"{name:4}  "
             f"{result.target.display_ref[:12]:12}  "
             f"{result.resolved_commit[:40]:40}  "
             f"{len(result.nps_values):4d}  "
-            f"{result.mean_nps:16.0f} +/- {result.stdev_nps:.0f}"
+            f"{result.mean_nps:16.0f}  +/- {result.ci95_nps:8.0f}"
         )
 
-    print(f"\nDifference: {diff:+.0f} +/- {diff_stdev:.0f} nodes/second ({pct:+.3f}%)")
+    print(f"\nDifference: {diff:+.0f} +/- {diff_ci95:.0f} nodes/second")
+    print(f"Speedup: {pct:+.5f}% +/- {speedup_ci95:.3f}%")
     print(f"P(speedup > 0): {probability_speedup:.6f}")
+
+
+def ci95_mean(values: list[int]) -> float:
+    if len(values) < 2:
+        return 0.0
+    return 1.96 * statistics.stdev(values) / math.sqrt(len(values))
 
 
 def normal_cdf(value: float) -> float:
