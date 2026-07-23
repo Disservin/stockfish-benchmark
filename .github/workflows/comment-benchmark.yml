@@ -102,7 +102,23 @@ jobs:
           GCP_MIN_CPU_PLATFORM: ${{ vars.GCP_MIN_CPU_PLATFORM || 'Intel Emerald Rapids' }}
         run: |
           cat > filter-benchmark-log.py <<'PY'
+          import os
+          import re
           import sys
+
+          sensitive_values = [
+              os.environ.get("GCP_ZONE"),
+          ]
+          sensitive_values = [value for value in sensitive_values if value]
+
+          def redact(line):
+              for value in sensitive_values:
+                  line = line.replace(value, "<redacted>")
+              line = re.sub(r"\b[\w.+-]+@[\w.-]+\.iam\.gserviceaccount\.com\b", "<redacted-service-account>", line)
+              line = re.sub(r"\bprojects/[^/\s]+", "projects/<redacted-project>", line)
+              line = re.sub(r"(?i)(project(?:s|[_ -]?id)?[=:\s'\"]+)[a-z][a-z0-9-]{4,28}[a-z0-9]", r"\1<redacted-project>", line)
+              line = re.sub(r"\bbenchmark-[a-z0-9-]+-[0-9a-f]{8}\b", "<redacted-instance>", line)
+              return line
 
           show = False
           benchmark_prefixes = (
@@ -114,12 +130,28 @@ jobs:
               "Version ",
               "Summary",
           )
+          error_markers = (
+              "ERROR:",
+              "Error:",
+              "error:",
+              "Exception",
+              "Traceback ",
+              "CalledProcessError",
+              "failed",
+              "Failed",
+              "not found",
+              "No such file",
+              "permission denied",
+              "Permission denied",
+              "GCP instance",
+              "preempted",
+          )
 
           for line in sys.stdin:
               if not show and line.startswith(benchmark_prefixes):
                   show = True
-              if show:
-                  print(line, end="", flush=True)
+              if show or any(marker in line for marker in error_markers):
+                  print(redact(line), end="", flush=True)
           PY
 
           set +e
@@ -146,9 +178,11 @@ jobs:
           STATUS: ${{ steps.bench.outputs.status }}
           ACTOR: ${{ github.event.comment.user.login }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          GCP_ZONE: ${{ vars.GCP_ZONE || 'us-central1-a' }}
         run: |
           python3 - <<'PY'
           import os
+          import re
           from pathlib import Path
 
           status = os.environ.get("STATUS")
@@ -169,6 +203,44 @@ jobs:
 
           def table_escape(value: str) -> str:
               return value.replace("|", "\\|")
+
+          sensitive_values = [
+              os.environ.get("GCP_ZONE"),
+          ]
+          sensitive_values = [value for value in sensitive_values if value]
+
+          def redact(line: str) -> str:
+              for value in sensitive_values:
+                  line = line.replace(value, "<redacted>")
+              line = re.sub(r"\b[\w.+-]+@[\w.-]+\.iam\.gserviceaccount\.com\b", "<redacted-service-account>", line)
+              line = re.sub(r"\bprojects/[^/\s]+", "projects/<redacted-project>", line)
+              line = re.sub(r"(?i)(project(?:s|[_ -]?id)?[=:\s'\"]+)[a-z][a-z0-9-]{4,28}[a-z0-9]", r"\1<redacted-project>", line)
+              line = re.sub(r"\bbenchmark-[a-z0-9-]+-[0-9a-f]{8}\b", "<redacted-instance>", line)
+              return line
+
+          def failure_excerpt(lines: list[str]) -> list[str]:
+              markers = (
+                  "ERROR:",
+                  "Error:",
+                  "error:",
+                  "Exception",
+                  "Traceback ",
+                  "CalledProcessError",
+                  "failed",
+                  "Failed",
+                  "not found",
+                  "No such file",
+                  "permission denied",
+                  "Permission denied",
+                  "GCP instance",
+                  "preempted",
+              )
+              for index, line in enumerate(lines):
+                  if any(marker in line for marker in markers):
+                      start = max(0, index - 8)
+                      end = min(len(lines), index + 32)
+                      return [redact(line) for line in lines[start:end]]
+              return [redact(line) for line in lines[-80:]]
 
           lines = output_path.read_text(errors="replace").splitlines() if output_path.exists() else []
           field_values = {}
@@ -196,7 +268,14 @@ jobs:
               print(file=comment)
 
               if status != "0":
-                  print(f"See the [GitHub Actions run]({run_url}) for details.", file=comment)
+                  print("### Error", file=comment)
+                  if lines:
+                      print("```text", file=comment)
+                      print("\n".join(failure_excerpt(lines)), file=comment)
+                      print("```", file=comment)
+                  else:
+                      print("benchmark-output.txt was not produced", file=comment)
+                  print(f"See the [GitHub Actions run]({run_url}) for full logs.", file=comment)
                   raise SystemExit(0)
 
               if field_values:
