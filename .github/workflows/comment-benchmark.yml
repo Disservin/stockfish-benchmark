@@ -196,7 +196,6 @@ jobs:
               "Compiler __VERSION__ macro",
               "Large pages",
               "Filled invocation",
-              "Available processors",
               "Thread count",
               "TT size [MiB]",
           ]
