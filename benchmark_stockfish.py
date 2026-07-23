@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import math
 import os
 import platform
@@ -175,7 +176,7 @@ def benchmark_target(args: argparse.Namespace, target: Target) -> Result:
     return Result(target=target, resolved_commit=resolved_commit, nps_values=nps_values)
 
 
-def print_summary(base: Result, test: Result) -> None:
+def benchmark_report(base: Result, test: Result) -> dict[str, object]:
     diff = test.mean_nps - base.mean_nps
     paired_diffs = [
         test_nps - base_nps for base_nps, test_nps in zip(base.nps_values, test.nps_values)
@@ -193,6 +194,30 @@ def print_summary(base: Result, test: Result) -> None:
     pct = 0.0 if base.mean_nps == 0 else diff * 100.0 / base.mean_nps
     speedup_ci95 = 0.0 if base.mean_nps == 0 else 100.0 * diff_ci95 / base.mean_nps
 
+    return {
+        "base": result_report(base),
+        "test": result_report(test),
+        "diff_nps": diff,
+        "diff_ci95_nps": diff_ci95,
+        "speedup_percent": pct,
+        "speedup_ci95_percent": speedup_ci95,
+        "probability_speedup": probability_speedup,
+    }
+
+
+def result_report(result: Result) -> dict[str, object]:
+    return {
+        "ref": result.target.display_ref,
+        "resolved": result.resolved_commit,
+        "runs": len(result.nps_values),
+        "mean_nps": result.mean_nps,
+        "ci95_nps": result.ci95_nps,
+    }
+
+
+def print_summary(base: Result, test: Result) -> None:
+    report = benchmark_report(base, test)
+
     print("\nSummary")
     print("name  ref           resolved                                  runs          mean nps        95% CI")
     for name, result in (("base", base), ("test", test)):
@@ -204,9 +229,10 @@ def print_summary(base: Result, test: Result) -> None:
             f"{result.mean_nps:16.0f}  +/- {result.ci95_nps:8.0f}"
         )
 
-    print(f"\nDifference: {diff:+.0f} +/- {diff_ci95:.0f} nodes/second")
-    print(f"Speedup: {pct:+.5f}% +/- {speedup_ci95:.3f}%")
-    print(f"P(speedup > 0): {probability_speedup:.6f}")
+    print(f"\nDifference: {report['diff_nps']:+.0f} +/- {report['diff_ci95_nps']:.0f} nodes/second")
+    print(f"Speedup: {report['speedup_percent']:+.5f}% +/- {report['speedup_ci95_percent']:.3f}%")
+    print(f"P(speedup > 0): {report['probability_speedup']:.6f}")
+    print(f"BENCHMARK_RESULT_JSON {json.dumps(report, sort_keys=True)}")
 
 
 def ci95_mean(values: list[int]) -> float:

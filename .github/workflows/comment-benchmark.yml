@@ -216,6 +216,7 @@ jobs:
           GCP_ZONE: ${{ vars.GCP_ZONE || 'us-central1-a' }}
         run: |
           python3 - <<'PY'
+          import json
           import os
           import re
           from pathlib import Path
@@ -236,6 +237,35 @@ jobs:
 
           def table_escape(value: str) -> str:
               return value.replace("|", "\\|")
+
+          def short_commit(value: str) -> str:
+              return value[:8] if value else "unknown"
+
+          def format_int(value: str) -> str:
+              try:
+                  return f"{int(round(float(value))):,}"
+              except ValueError:
+                  return value
+
+          def format_signed_int(value: str) -> str:
+              try:
+                  parsed = int(round(float(value)))
+              except ValueError:
+                  return value
+              return f"{parsed:+,}"
+
+          def format_percent(value: str, digits: int = 3) -> str:
+              try:
+                  parsed = float(value)
+              except ValueError:
+                  return value
+              return f"{parsed:+.{digits}f}%"
+
+          def format_probability(value: str) -> str:
+              try:
+                  return f"{float(value) * 100.0:.1f}%"
+              except ValueError:
+                  return value
 
           sensitive_values = [
               os.environ.get("GCP_ZONE"),
@@ -292,12 +322,34 @@ jobs:
                           break
                   break
 
+          benchmark_report = None
+          for line in lines:
+              if not line.startswith("BENCHMARK_RESULT_JSON "):
+                  continue
+              try:
+                  benchmark_report = json.loads(line.split(" ", 1)[1])
+              except json.JSONDecodeError:
+                  benchmark_report = None
+
+          has_compact_summary = isinstance(benchmark_report, dict) and all(
+              key in benchmark_report
+              for key in (
+                  "base",
+                  "test",
+                  "diff_nps",
+                  "diff_ci95_nps",
+                  "speedup_percent",
+                  "speedup_ci95_percent",
+                  "probability_speedup",
+              )
+          )
+
           with open("comment.md", "w", encoding="utf-8") as comment:
               if status == "0":
-                  print("Stockfish speedtest benchmark finished.", file=comment)
+                  print(f"Stockfish speedtest finished for @{actor} against official master.", file=comment)
               else:
                   print("Stockfish speedtest benchmark failed.", file=comment)
-              print(f"Benchmark run at the request of @{actor}. Baseline: official Stockfish master.", file=comment)
+                  print(f"Benchmark run at the request of @{actor}. Baseline: official Stockfish master.", file=comment)
               print(file=comment)
 
               if status != "0":
@@ -311,16 +363,45 @@ jobs:
                   print(f"See the [GitHub Actions run]({run_url}) for full logs.", file=comment)
                   raise SystemExit(0)
 
-              if field_values:
-                  print("### Run Details", file=comment)
-                  print("| Field | Value |", file=comment)
-                  print("| --- | --- |", file=comment)
-                  for field in fields:
-                      if field in field_values:
-                          print(f"| {field} | {table_escape(field_values[field])} |", file=comment)
-                  print(file=comment)
+              if has_compact_summary:
+                  run_details = []
+                  for field in ("Filled invocation", "Compilation architecture", "Compiled by", "Large pages"):
+                      if field not in field_values:
+                          continue
+                      value = field_values[field]
+                      if field == "Compiled by":
+                          compiler_match = re.match(r"([^\s]+)\s+.*?([0-9]+(?:\.[0-9]+)+)", value)
+                          value = f"{compiler_match.group(1)} {compiler_match.group(2)}" if compiler_match else value
+                      elif field == "Large pages":
+                          value = f"large pages: {value}"
+                      run_details.append(f"`{value}`" if field != "Large pages" else value)
 
-              if summary:
+                  if run_details:
+                      print(" | ".join(run_details), file=comment)
+                      print(file=comment)
+
+                  print("| | Ref | Runs | NPS | 95% CI |", file=comment)
+                  print("| --- | --- | ---: | ---: | ---: |", file=comment)
+                  for name in ("base", "test"):
+                      row = benchmark_report[name]
+                      print(
+                          f"| {name} | `{short_commit(row['resolved'])}` | {row['runs']} | {format_int(row['mean_nps'])} | ±{format_int(row['ci95_nps'])} |",
+                          file=comment,
+                      )
+                  print(file=comment)
+                  print(f"**Diff:** {format_signed_int(benchmark_report['diff_nps'])} ±{format_int(benchmark_report['diff_ci95_nps'])} nps  ", file=comment)
+                  print(f"**Speedup:** {format_percent(benchmark_report['speedup_percent'])} ±{format_percent(benchmark_report['speedup_ci95_percent']).lstrip('+')}  ", file=comment)
+                  print(f"**P(speedup > 0):** {format_probability(benchmark_report['probability_speedup'])}", file=comment)
+              elif summary:
+                  if field_values:
+                      print("### Run Details", file=comment)
+                      print("| Field | Value |", file=comment)
+                      print("| --- | --- |", file=comment)
+                      for field in fields:
+                          if field in field_values:
+                              print(f"| {field} | {table_escape(field_values[field])} |", file=comment)
+                      print(file=comment)
+
                   print("### Result", file=comment)
                   print("```text", file=comment)
                   print("\n".join(summary), file=comment)
