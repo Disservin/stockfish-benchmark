@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build Stockfish master and one target ref, then compare speedtest NPS."""
+"""Build Stockfish master and one target ref, then compare alternating speedtests."""
 
 from __future__ import annotations
 
@@ -18,6 +18,7 @@ from pathlib import Path
 
 
 DEFAULT_REPO = "https://github.com/official-stockfish/Stockfish.git"
+DEFAULT_THRESHOLDS = [0.0, 0.25, 0.5, 1.0]
 NPS_RE = re.compile(r"^Nodes/second\s*:\s*([0-9][0-9,]*)\s*$", re.MULTILINE)
 
 
@@ -158,36 +159,60 @@ def run_speedtest(binary: Path, speedtest_args: list[str]) -> int:
     return parse_nps(completed.stdout)
 
 
-def benchmark_target(args: argparse.Namespace, target: Target) -> Result:
+def prepare_target(args: argparse.Namespace, target: Target) -> tuple[str, Path]:
     source_dir = source_dir_for_target(args.source_dir, target)
     args.source_dir.mkdir(parents=True, exist_ok=True)
     ensure_stockfish_repo(target.repo_url, source_dir)
     resolved_commit = checkout_target(source_dir, target)
     binary = build_stockfish(source_dir, args.jobs, args.arch)
+    return resolved_commit, binary
 
-    nps_values = []
+
+def benchmark_targets(
+    args: argparse.Namespace, base_target: Target, test_target: Target
+) -> tuple[Result, Result]:
+    base_commit, base_binary = prepare_target(args, base_target)
+    test_commit, test_binary = prepare_target(args, test_target)
+    base_values: list[int] = []
+    test_values: list[int] = []
+
     for run_index in range(1, args.runs + 1):
-        print(
-            f"speedtest run {run_index}/{args.runs} for {target.label} {target.display_ref}",
-            flush=True,
+        runs = (
+            (
+                (base_target, base_binary, base_values),
+                (test_target, test_binary, test_values),
+            )
+            if run_index % 2 == 1
+            else (
+                (test_target, test_binary, test_values),
+                (base_target, base_binary, base_values),
+            )
         )
-        nps_values.append(run_speedtest(binary, args.speedtest_args))
+        for target, binary, values in runs:
+            print(
+                f"speedtest run {run_index}/{args.runs} for "
+                f"{target.label} {target.display_ref}",
+                flush=True,
+            )
+            values.append(run_speedtest(binary, args.speedtest_args))
 
-    return Result(target=target, resolved_commit=resolved_commit, nps_values=nps_values)
+    return (
+        Result(base_target, base_commit, base_values),
+        Result(test_target, test_commit, test_values),
+    )
 
 
-def benchmark_report(base: Result, test: Result) -> dict[str, object]:
+def benchmark_report(
+    base: Result, test: Result, thresholds: list[float] | None = None
+) -> dict[str, object]:
     diff = test.mean_nps - base.mean_nps
     diff_stderr = mean_stderr(base.nps_values, test.nps_values)
     diff_ci95 = 1.96 * diff_stderr
-
-    if diff_stderr == 0:
-        probability_speedup = 1.0 if diff > 0 else 0.5 if diff == 0 else 0.0
-    else:
-        probability_speedup = normal_cdf(diff / diff_stderr)
+    thresholds = DEFAULT_THRESHOLDS if thresholds is None else thresholds
 
     pct = 0.0 if base.mean_nps == 0 else diff * 100.0 / base.mean_nps
     speedup_ci95 = 0.0 if base.mean_nps == 0 else 100.0 * diff_ci95 / base.mean_nps
+    probabilities = speedup_probabilities(base, test, thresholds)
 
     return {
         "base": result_report(base),
@@ -196,7 +221,8 @@ def benchmark_report(base: Result, test: Result) -> dict[str, object]:
         "diff_ci95_nps": diff_ci95,
         "speedup_percent": pct,
         "speedup_ci95_percent": speedup_ci95,
-        "probability_speedup": probability_speedup,
+        "probability_speedup": probability_difference_above(diff, diff_stderr, 0.0),
+        "speedup_probabilities": probabilities,
     }
 
 
@@ -216,8 +242,8 @@ def result_report(result: Result) -> dict[str, object]:
     }
 
 
-def print_summary(base: Result, test: Result) -> None:
-    report = benchmark_report(base, test)
+def print_summary(base: Result, test: Result, thresholds: list[float]) -> None:
+    report = benchmark_report(base, test, thresholds)
 
     print("\nSummary")
     print("name  ref           resolved                                  runs          mean nps        95% CI")
@@ -233,6 +259,12 @@ def print_summary(base: Result, test: Result) -> None:
     print(f"\nDifference: {report['diff_nps']:+.0f} +/- {report['diff_ci95_nps']:.0f} nodes/second")
     print(f"Speedup: {report['speedup_percent']:+.5f}% +/- {report['speedup_ci95_percent']:.3f}%")
     print(f"P(speedup > 0): {report['probability_speedup']:.6f}")
+    print("\nProbability candidate is faster than baseline by at least")
+    for probability in speedup_probabilities(base, test, thresholds):
+        print(
+            f"  {probability['threshold_percent']:5.2f}%: "
+            f"{probability['probability'] * 100:6.2f}%"
+        )
     print(f"BENCHMARK_RESULT_JSON {json.dumps(report, sort_keys=True)}")
 
 
@@ -244,6 +276,30 @@ def ci95_mean(values: list[int]) -> float:
 
 def normal_cdf(value: float) -> float:
     return 0.5 * (1.0 + math.erf(value / math.sqrt(2.0)))
+
+
+def probability_difference_above(
+    difference: float, stderr: float, threshold: float
+) -> float:
+    if stderr == 0:
+        return 1.0 if difference > threshold else 0.5 if difference == threshold else 0.0
+    return normal_cdf((difference - threshold) / stderr)
+
+
+def speedup_probabilities(
+    base: Result, test: Result, thresholds: list[float]
+) -> list[dict[str, float]]:
+    difference = test.mean_nps - base.mean_nps
+    stderr = mean_stderr(base.nps_values, test.nps_values)
+    return [
+        {
+            "threshold_percent": threshold,
+            "probability": probability_difference_above(
+                difference, stderr, base.mean_nps * threshold / 100.0
+            ),
+        }
+        for threshold in thresholds
+    ]
 
 
 def positive_int(value: str) -> int:
@@ -301,6 +357,13 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         default="1 16 30",
         help='Quoted arguments after speedtest. Default: "1 16 30"',
     )
+    parser.add_argument(
+        "--thresholds",
+        nargs="*",
+        type=float,
+        default=DEFAULT_THRESHOLDS,
+        help="Speedup thresholds (percent) to report probabilities for. Default: 0 0.25 0.5 1.0.",
+    )
     return parser.parse_args(argv)
 
 
@@ -319,9 +382,8 @@ def main(argv: list[str]) -> int:
     args.speedtest_args = shlex.split(args.speedtest_args)
 
     base_target, test_target = make_targets(args)
-    base = benchmark_target(args, base_target)
-    test = benchmark_target(args, test_target)
-    print_summary(base, test)
+    base, test = benchmark_targets(args, base_target, test_target)
+    print_summary(base, test, args.thresholds)
     return 0
 
 

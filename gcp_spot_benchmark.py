@@ -293,6 +293,9 @@ def run_remote_benchmark(args: argparse.Namespace, remote_runner: str) -> None:
         remote_args.extend(["--arch", args.arch])
     if args.speedtest_args:
         remote_args.extend(["--speedtest-args", args.speedtest_args])
+    if args.thresholds is not None:
+        remote_args.append("--thresholds")
+        remote_args.extend(str(threshold) for threshold in args.thresholds)
 
     gcloud_ssh(args.instance, args.zone, shlex.join(remote_args))
 
@@ -315,6 +318,12 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--arch", help="Optional Stockfish make ARCH value, for example x86-64-avx512.")
     parser.add_argument("--runs", type=positive_int, default=3, help="Speedtest runs per commit. Default: 3.")
     parser.add_argument("--speedtest-args", default="1 16 30", help='Quoted arguments after speedtest. Default: "1 16 30"')
+    parser.add_argument(
+        "--thresholds",
+        nargs="*",
+        type=float,
+        help="Speedup thresholds (percent) to report probabilities for. Default: 0 0.25 0.5 1.0.",
+    )
     parser.add_argument(
         "--instance",
         default=f"{DEFAULT_INSTANCE_PREFIX}-{uuid.uuid4().hex[:8]}",
