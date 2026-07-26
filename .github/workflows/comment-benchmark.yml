@@ -398,6 +398,17 @@ jobs:
                   print(f"Diff: {format_signed_int(benchmark_report['diff_nps'])} ±{format_int(benchmark_report['diff_ci95_nps'])} nps", file=comment)
                   print(f"Speedup: {format_percent(benchmark_report['speedup_percent'])} ±{format_percent(benchmark_report['speedup_ci95_percent']).lstrip('+')}", file=comment)
                   print(f"P(speedup > 0): {format_probability(benchmark_report['probability_speedup'])}", file=comment)
+                  probabilities = benchmark_report.get("speedup_probabilities", [])
+                  if isinstance(probabilities, list) and probabilities:
+                      print("Probability candidate is faster than baseline by at least", file=comment)
+                      for probability in probabilities:
+                          if not isinstance(probability, dict):
+                              continue
+                          threshold = float(probability["threshold_percent"])
+                          print(
+                              f"  {threshold:5.2f}%: {format_probability(probability['probability']):>7}",
+                              file=comment,
+                          )
                   print("```", file=comment)
               elif summary:
                   if field_values:
