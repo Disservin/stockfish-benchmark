@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import re
 import shlex
 import subprocess
@@ -11,10 +12,13 @@ import sys
 import time
 import uuid
 from pathlib import Path
+from urllib.parse import urlencode
+from urllib.request import Request, urlopen
 
 
 DEFAULT_REPO = "https://github.com/official-stockfish/Stockfish.git"
 DEFAULT_INSTANCE_PREFIX = "benchmark-avx512icl"
+COMPUTE_ENGINE_SERVICE = "6F81-5844-456A"
 
 
 def run(
@@ -28,6 +32,115 @@ def run(
         stdout=subprocess.PIPE if capture else None,
         stderr=subprocess.STDOUT if capture else None,
     )
+
+
+def gcloud_json(cmd: list[str]) -> list[dict[str, object]]:
+    completed = run([*cmd, "--format=json"], capture=True)
+    result = json.loads(completed.stdout)
+    if not isinstance(result, list):
+        raise SystemExit(f"Expected a JSON list from {' '.join(cmd)}")
+    return result
+
+
+def current_compute_skus() -> list[dict[str, object]]:
+    token = run(["gcloud", "auth", "print-access-token"], capture=True).stdout.strip()
+    skus: list[dict[str, object]] = []
+    page_token = ""
+
+    while True:
+        query = {"currencyCode": "USD", "pageSize": "5000"}
+        if page_token:
+            query["pageToken"] = page_token
+        url = (
+            f"https://cloudbilling.googleapis.com/v1/services/{COMPUTE_ENGINE_SERVICE}/skus?"
+            f"{urlencode(query)}"
+        )
+        request = Request(url, headers={"Authorization": f"Bearer {token}"})
+        with urlopen(request, timeout=60) as response:
+            page = json.load(response)
+        skus.extend(page.get("skus", []))
+        page_token = page.get("nextPageToken", "")
+        if not page_token:
+            return skus
+
+
+def sku_price(sku: dict[str, object]) -> float:
+    pricing_info = sku.get("pricingInfo", [])
+    if not isinstance(pricing_info, list) or not pricing_info:
+        raise ValueError("SKU has no pricing information")
+    expression = pricing_info[-1]["pricingExpression"]
+    rate = expression["tieredRates"][0]["unitPrice"]
+    return int(rate.get("units", 0)) + int(rate.get("nanos", 0)) / 1_000_000_000
+
+
+def choose_cheapest_zone(machine_type: str) -> tuple[str, float]:
+    custom_match = re.fullmatch(
+        r"([a-z][a-z0-9]*)-custom-([0-9]+)-([0-9]+)(?:-ext)?", machine_type
+    )
+    machine_filter = (
+        f"name~^{custom_match.group(1)}-" if custom_match else f"name={machine_type}"
+    )
+    machine_types = gcloud_json(
+        [
+            "gcloud",
+            "compute",
+            "machine-types",
+            "list",
+            f"--filter={machine_filter}",
+        ]
+    )
+    if not machine_types:
+        raise SystemExit(f"Machine type {machine_type!r} is not available in any zone")
+
+    series = machine_type.split("-", 1)[0].upper()
+    if custom_match:
+        custom_cpus = int(custom_match.group(2))
+        custom_memory_mb = int(custom_match.group(3))
+        machine_types = [
+            {
+                "zone": zone,
+                "guestCpus": custom_cpus,
+                "memoryMb": custom_memory_mb,
+            }
+            for zone in sorted({str(machine["zone"]) for machine in machine_types})
+        ]
+    price_prefixes = {
+        "CPU": f"Spot Preemptible {series}{' Custom' if custom_match else ''} Instance Core running ",
+        "RAM": f"Spot Preemptible {series}{' Custom' if custom_match else ''} Instance Ram running ",
+    }
+    regional_prices: dict[str, dict[str, float]] = {}
+    for sku in current_compute_skus():
+        category = sku.get("category", {})
+        if not isinstance(category, dict) or category.get("usageType") != "Preemptible":
+            continue
+        resource_group = category.get("resourceGroup")
+        prefix = price_prefixes.get(str(resource_group))
+        if not prefix or not str(sku.get("description", "")).startswith(prefix):
+            continue
+        taxonomy = sku.get("geoTaxonomy", {})
+        regions = taxonomy.get("regions", []) if isinstance(taxonomy, dict) else []
+        for region in regions:
+            regional_prices.setdefault(str(region), {})[str(resource_group)] = sku_price(sku)
+
+    choices: list[tuple[float, str]] = []
+    for machine in machine_types:
+        zone = str(machine["zone"])
+        region = zone.rsplit("-", 1)[0]
+        prices = regional_prices.get(region, {})
+        if "CPU" not in prices or "RAM" not in prices:
+            continue
+        hourly_price = (
+            int(machine["guestCpus"]) * prices["CPU"]
+            + int(machine["memoryMb"]) / 1024 * prices["RAM"]
+        )
+        choices.append((hourly_price, zone))
+
+    if not choices:
+        raise SystemExit(
+            f"Could not find regional spot CPU and RAM prices for machine series {series}"
+        )
+    hourly_price, zone = min(choices)
+    return zone, hourly_price
 
 
 def instance_status(instance: str, zone: str) -> str | None:
@@ -89,7 +202,6 @@ def create_instance_command(args: argparse.Namespace) -> list[str]:
         args.instance,
         f"--zone={args.zone}",
         f"--machine-type={args.machine_type}",
-        f"--min-cpu-platform={args.min_cpu_platform}",
         "--provisioning-model=SPOT",
         "--instance-termination-action=DELETE",
         f"--image-family={args.image_family}",
@@ -97,6 +209,8 @@ def create_instance_command(args: argparse.Namespace) -> list[str]:
         "--no-service-account",
         "--no-scopes",
     ]
+    if args.min_cpu_platform:
+        cmd.append(f"--min-cpu-platform={args.min_cpu_platform}")
     if args.machine_type.startswith("c4-"):
         cmd.append("--turbo-mode=ALL_CORE_MAX")
     return cmd
@@ -206,9 +320,9 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         default=f"{DEFAULT_INSTANCE_PREFIX}-{uuid.uuid4().hex[:8]}",
         help="GCP instance name. Defaults to a unique benchmark-avx512icl-* name.",
     )
-    parser.add_argument("--zone", default="us-central1-a", help="GCP zone.")
+    parser.add_argument("--zone", help="GCP zone. By default, use the cheapest region currently available for the machine type.")
     parser.add_argument("--machine-type", default="c4-highcpu-2", help="GCP machine type.")
-    parser.add_argument("--min-cpu-platform", default="Intel Ice Lake", help="Minimum CPU platform.")
+    parser.add_argument("--min-cpu-platform", help="Minimum CPU platform.")
     parser.add_argument("--image-family", default="debian-13", help="GCP image family.")
     parser.add_argument("--image-project", default="debian-cloud", help="GCP image project.")
     parser.add_argument("--remote-source-dir", default="/tmp/stockfish-src", help="Remote Stockfish cache directory. Separate base/ and test/ checkouts are stored below it.")
@@ -218,6 +332,13 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 
 def main(argv: list[str]) -> int:
     args = parse_args(argv)
+    if not args.zone:
+        args.zone, hourly_price = choose_cheapest_zone(args.machine_type)
+        print(
+            f"Selected {args.zone} for {args.machine_type} at approximately "
+            f"${hourly_price:.6f}/hour spot price",
+            flush=True,
+        )
 
     created = False
     try:

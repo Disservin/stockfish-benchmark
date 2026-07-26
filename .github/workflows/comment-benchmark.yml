@@ -132,9 +132,9 @@ jobs:
           BENCH_ARCH: ${{ steps.command.outputs.benchmark_arch || vars.BENCH_ARCH || 'x86-64-avx512icl' }}
           BENCH_RUNS: ${{ steps.command.outputs.benchmark_runs || vars.BENCH_RUNS || '40' }}
           BENCH_SPEEDTEST_ARGS: ${{ steps.command.outputs.benchmark_speedtest_args || vars.BENCH_SPEEDTEST_ARGS || '1 16 8' }}
-          GCP_ZONE: ${{ vars.GCP_ZONE || 'us-central1-a' }}
+          GCP_ZONE: ${{ vars.GCP_ZONE || 'europe-west9' }}
           GCP_MACHINE_TYPE: ${{ vars.GCP_MACHINE_TYPE || 'c4-highcpu-2' }}
-          GCP_MIN_CPU_PLATFORM: ${{ vars.GCP_MIN_CPU_PLATFORM || 'Intel Emerald Rapids' }}
+        #   GCP_MIN_CPU_PLATFORM: ${{ vars.GCP_MIN_CPU_PLATFORM || 'Intel Emerald Rapids' }}
         run: |
           cat > filter-benchmark-log.py <<'PY'
           import os
@@ -146,9 +146,11 @@ jobs:
           ]
           sensitive_values = [value for value in sensitive_values if value]
 
+
           def redact(line):
               for value in sensitive_values:
                   line = line.replace(value, "<redacted>")
+
               line = re.sub(r"\b[\w.+-]+@[\w.-]+\.iam\.gserviceaccount\.com\b", "<redacted-service-account>", line)
               line = re.sub(r"\bprojects/[^/\s]+", "projects/<redacted-project>", line)
               line = re.sub(r"(?i)(project(?:s|[_ -]?id)?[=:\s'\"]+)[a-z][a-z0-9-]{4,28}[a-z0-9]", r"\1<redacted-project>", line)
@@ -213,7 +215,7 @@ jobs:
           STATUS: ${{ steps.bench.outputs.status }}
           ACTOR: ${{ github.event.comment.user.login }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          GCP_ZONE: ${{ vars.GCP_ZONE || 'us-central1-a' }}
+          GCP_ZONE: ${{ vars.GCP_ZONE || 'europe-west9' }}
         run: |
           python3 - <<'PY'
           import json
@@ -273,9 +275,11 @@ jobs:
           ]
           sensitive_values = [value for value in sensitive_values if value]
 
+
           def redact(line: str) -> str:
               for value in sensitive_values:
                   line = line.replace(value, "<redacted>")
+
               line = re.sub(r"\b[\w.+-]+@[\w.-]+\.iam\.gserviceaccount\.com\b", "<redacted-service-account>", line)
               line = re.sub(r"\bprojects/[^/\s]+", "projects/<redacted-project>", line)
               line = re.sub(r"(?i)(project(?:s|[_ -]?id)?[=:\s'\"]+)[a-z][a-z0-9-]{4,28}[a-z0-9]", r"\1<redacted-project>", line)
